@@ -97,6 +97,8 @@ Find wallets that correctly predicted outcomes across multiple resolved markets.
 3. Set minimum markets won threshold
 4. Get a list of wallets that won on multiple selected markets
 
+![Multi-Market Winners](assets/multi_market_winners.png)
+
 #### Wallet Activity
 Analyze any wallet's trading activity and cost basis.
 
@@ -165,6 +167,10 @@ Configure Polybot at `/settings`:
 | `TELEGRAM_PROD_CHAT_ID` | Telegram chat ID for production |
 | `TELEGRAM_BETA_CHAT_ID` | Telegram chat ID for beta |
 | `STAGE` | Set to `PROD` for production channels |
+
+![Discord Connection](assets/discord_connection.png)
+
+![Telegram Connection](assets/telegram_connection.png)
 
 ### Optional: Persistence (Recommended)
 
