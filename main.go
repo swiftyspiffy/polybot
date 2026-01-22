@@ -66,6 +66,10 @@ func main() {
 	var authHandler *app.AuthHandler
 	rpID := os.Getenv("WEBAUTHN_RP_ID")
 	rpOriginsStr := os.Getenv("WEBAUTHN_RP_ORIGINS")
+	logger.Info("webauthn config from env",
+		zap.String("WEBAUTHN_RP_ID", rpID),
+		zap.String("WEBAUTHN_RP_ORIGINS", rpOriginsStr),
+	)
 	if settingsGistID != "" && rpID != "" && rpOriginsStr != "" {
 		rpOrigins := strings.Split(rpOriginsStr, ",")
 		var err error
