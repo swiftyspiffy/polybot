@@ -28,15 +28,6 @@ jobs:
           push: true
           tags: ghcr.io/${{ github.repository }}:latest
 
-      - name: Deploy on server via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          script: |
-            cd /opt/polybot
-            docker compose pull
-            docker compose up -d
-            docker image prune -f
+      - name: Trigger Portainer redeploy
+        run: |
+          curl -X POST "${{ secrets.PORTAINER_WEBHOOK_URL }}"
