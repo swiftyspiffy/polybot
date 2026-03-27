@@ -105,6 +105,7 @@ func (c *Client) SaveJSON(ctx context.Context, filename string, data any) error 
 
 // Save saves content to a gist file.
 // If gistID is provided (non-empty), it overrides the client's default gist ID.
+// Retries on 409 conflict errors with exponential backoff.
 func (c *Client) Save(ctx context.Context, filename, content string, gistID ...string) error {
 	if !c.IsEnabled() {
 		return fmt.Errorf("gist client not configured")
@@ -115,6 +116,59 @@ func (c *Client) Save(ctx context.Context, filename, content string, gistID ...s
 		targetGistID = gistID[0]
 	}
 
+	// Retry logic for 409 conflicts
+	maxRetries := 3
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: 1s, 2s, 4s
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			c.logger.Debug("retrying gist save after conflict",
+				zap.Int("attempt", attempt+1),
+				zap.Duration("backoff", backoff),
+			)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		err := c.doSave(ctx, targetGistID, filename, content)
+		if err == nil {
+			return nil
+		}
+
+		// Check if it's a 409 conflict error
+		if isConflictError(err) {
+			lastErr = err
+			c.logger.Warn("gist save conflict, will retry",
+				zap.Int("attempt", attempt+1),
+				zap.Int("maxRetries", maxRetries),
+				zap.Error(err),
+			)
+			continue
+		}
+
+		// Non-retryable error
+		return err
+	}
+
+	return fmt.Errorf("gist save failed after %d retries: %w", maxRetries, lastErr)
+}
+
+// isConflictError checks if the error is a 409 conflict.
+func isConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return bytes.Contains([]byte(errStr), []byte("status=409")) ||
+		bytes.Contains([]byte(errStr), []byte("\"status\":\"409\""))
+}
+
+// doSave performs the actual save operation without retry logic.
+func (c *Client) doSave(ctx context.Context, targetGistID, filename, content string) error {
 	reqBody := gistRequest{
 		Description: "polybot cache",
 		Public:      false,
