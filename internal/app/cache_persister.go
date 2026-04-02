@@ -94,6 +94,18 @@ func (cp *CachePersister) LoadSeenTrades(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
+	// Validate JSON structure before attempting to parse
+	if !json.Valid([]byte(content)) {
+		cp.logger.Warn("seen trades JSON is invalid/truncated, starting fresh",
+			zap.String("gistID", gistID),
+			zap.String("fileName", cp.seenTradesFileName),
+			zap.Int("contentLen", len(content)),
+			zap.String("contentTail", truncateTail(content, 100)),
+		)
+		// Return 0 without error to allow app to continue with fresh cache
+		return 0, nil
+	}
+
 	// Parse the snapshot
 	var snapshot SeenTradesSnapshot
 	if err := json.Unmarshal([]byte(content), &snapshot); err != nil {
@@ -103,7 +115,8 @@ func (cp *CachePersister) LoadSeenTrades(ctx context.Context) (int, error) {
 			zap.Int("contentLen", len(content)),
 			zap.Error(err),
 		)
-		return 0, err
+		// Return 0 without error to allow app to continue with fresh cache
+		return 0, nil
 	}
 
 	imported := cp.tradeMonitor.ImportSeenTrades(&snapshot)
@@ -169,6 +182,8 @@ func (cp *CachePersister) SaveSeenTrades(ctx context.Context) error {
 
 // LoadCache attempts to load the cache from GitHub Gist.
 // Returns the number of entries loaded, or 0 if no cache found.
+// If the cache is corrupted (e.g., truncated JSON), it logs a warning
+// and returns 0 to allow the app to continue with a fresh cache.
 func (cp *CachePersister) LoadCache(ctx context.Context) (int, error) {
 	if !cp.gistClient.IsEnabled() {
 		cp.logger.Info("gist client not configured, skipping cache load")
@@ -201,6 +216,18 @@ func (cp *CachePersister) LoadCache(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
+	// Validate JSON structure before attempting to parse
+	if !json.Valid([]byte(content)) {
+		cp.logger.Warn("wallet cache JSON is invalid/truncated, starting fresh",
+			zap.String("gistID", gistID),
+			zap.String("fileName", cp.cacheFileName),
+			zap.Int("contentLen", len(content)),
+			zap.String("contentTail", truncateTail(content, 100)),
+		)
+		// Return 0 without error to allow app to continue with fresh cache
+		return 0, nil
+	}
+
 	imported, err := cp.walletTracker.ImportCacheJSON([]byte(content))
 	if err != nil {
 		cp.logger.Warn("failed to parse wallet cache JSON",
@@ -209,7 +236,8 @@ func (cp *CachePersister) LoadCache(ctx context.Context) (int, error) {
 			zap.Int("contentLen", len(content)),
 			zap.Error(err),
 		)
-		return 0, err
+		// Return 0 without error to allow app to continue with fresh cache
+		return 0, nil
 	}
 
 	cp.logger.Info("loaded cache from gist",
@@ -250,6 +278,23 @@ func (cp *CachePersister) SaveCache(ctx context.Context) error {
 		)
 	}
 
+	// Pre-validate JSON before saving to catch issues early
+	jsonData, err := json.Marshal(snapshot)
+	if err != nil {
+		cp.logger.Error("failed to marshal wallet cache",
+			zap.Error(err),
+		)
+		return err
+	}
+
+	// Sanity check: ensure the JSON we're about to save is valid
+	if !json.Valid(jsonData) {
+		cp.logger.Error("generated wallet cache JSON is invalid, skipping save",
+			zap.Int("bytes", len(jsonData)),
+		)
+		return nil
+	}
+
 	if err := cp.gistClient.SaveJSON(ctx, cp.cacheFileName, snapshot); err != nil {
 		return err
 	}
@@ -257,6 +302,7 @@ func (cp *CachePersister) SaveCache(ctx context.Context) error {
 	cp.logger.Info("saved cache to gist",
 		zap.String("gistID", cp.gistClient.GetGistID()),
 		zap.Int("wallets", len(snapshot.Wallets)),
+		zap.Int("bytes", len(jsonData)),
 	)
 
 	return nil
@@ -330,4 +376,12 @@ func trimWalletCache(wallets map[string]WalletStats, maxEntries int) map[string]
 	}
 
 	return result
+}
+
+// truncateTail returns the last n characters of a string for debugging.
+func truncateTail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "..." + s[len(s)-n:]
 }
