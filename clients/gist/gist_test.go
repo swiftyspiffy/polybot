@@ -3,6 +3,7 @@ package gist
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"polybot/config"
@@ -571,5 +572,97 @@ func TestLoadJSON_LoadError(t *testing.T) {
 	err := client.LoadJSON(context.Background(), "test.json", &dest)
 	if err == nil {
 		t.Error("expected error when load fails")
+	}
+}
+
+func TestSave_ConflictRetry(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			// First two attempts return 409 conflict
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(`{"message":"Gist cannot be updated.","status":"409"}`))
+			return
+		}
+		// Third attempt succeeds
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(Gist{ID: "test-id"})
+	}))
+	defer server.Close()
+
+	client := &Client{
+		logger:     zap.NewNop(),
+		httpClient: server.Client(),
+		token:      "test-token",
+		gistID:     "test-id",
+	}
+	client.httpClient = &http.Client{
+		Transport: &testTransport{
+			baseURL:   server.URL,
+			transport: http.DefaultTransport,
+		},
+	}
+
+	err := client.Save(context.Background(), "test.json", "content")
+	if err != nil {
+		t.Errorf("expected success after retry, got: %v", err)
+	}
+	if attempts != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestSave_ConflictExhausted(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		// Always return 409 conflict
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte(`{"message":"Gist cannot be updated.","status":"409"}`))
+	}))
+	defer server.Close()
+
+	client := &Client{
+		logger:     zap.NewNop(),
+		httpClient: server.Client(),
+		token:      "test-token",
+		gistID:     "test-id",
+	}
+	client.httpClient = &http.Client{
+		Transport: &testTransport{
+			baseURL:   server.URL,
+			transport: http.DefaultTransport,
+		},
+	}
+
+	err := client.Save(context.Background(), "test.json", "content")
+	if err == nil {
+		t.Error("expected error after all retries exhausted")
+	}
+	if attempts != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestIsConflictError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"nil error", nil, false},
+		{"conflict status", fmt.Errorf("api error status=409 body={\"message\":\"conflict\"}"), true},
+		{"conflict in json", fmt.Errorf("api error status=500 body={\"status\":\"409\"}"), true},
+		{"other error", fmt.Errorf("api error status=500 body=internal"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isConflictError(tt.err)
+			if result != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, result)
+			}
+		})
 	}
 }
