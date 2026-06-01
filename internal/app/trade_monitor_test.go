@@ -78,6 +78,29 @@ func TestDefaultTradeMonitorConfig(t *testing.T) {
 	}
 }
 
+func TestTradeMonitorPollBackoff(t *testing.T) {
+	base := 10 * time.Second
+
+	tests := []struct {
+		failures int
+		want     time.Duration
+	}{
+		{failures: 0, want: base},
+		{failures: 1, want: base},
+		{failures: 2, want: 20 * time.Second},
+		{failures: 3, want: 40 * time.Second},
+		{failures: 4, want: 80 * time.Second},
+		{failures: 5, want: maxTradeMonitorPollBackoff},
+		{failures: 20, want: maxTradeMonitorPollBackoff},
+	}
+
+	for _, tt := range tests {
+		if got := tradeMonitorPollBackoff(base, tt.failures); got != tt.want {
+			t.Errorf("failures=%d: got %v, want %v", tt.failures, got, tt.want)
+		}
+	}
+}
+
 func TestSetMarkets(t *testing.T) {
 	monitor := NewTradeMonitor(nil, nil, nil, nil, nil, nil, DefaultTradeMonitorConfig())
 
@@ -168,8 +191,8 @@ func TestProcessTrade_BelowMinNotional(t *testing.T) {
 	trade := polymarketapi.Trade{
 		TransactionHash: "0xhash",
 		Asset:           "asset1",
-		Size:            10,    // Small
-		Price:           0.5,   // Notional = 5, below min of 1000
+		Size:            10,  // Small
+		Price:           0.5, // Notional = 5, below min of 1000
 		ProxyWallet:     "0x123",
 	}
 
@@ -1161,4 +1184,3 @@ func TestShouldProcessWallet(t *testing.T) {
 		t.Error("expected non-allowed wallet to be rejected")
 	}
 }
-

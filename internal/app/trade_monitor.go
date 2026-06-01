@@ -37,12 +37,12 @@ type TradeMonitorConfig struct {
 	NewWalletMinNotional float64 // Minimum notional for new wallet alerts
 
 	// Contrarian bet detection
-	ContrarianMaxPrice   float64 // Max price to be considered "contrarian" (e.g., 0.10 = 10¢)
+	ContrarianMaxPrice    float64 // Max price to be considered "contrarian" (e.g., 0.10 = 10¢)
 	ContrarianMinNotional float64 // Minimum notional for contrarian bet alerts
 
 	// Massive trade detection
-	MassiveTradeMinNotional  float64 // Minimum notional for massive trade alerts (e.g., 50000)
-	MassiveTradeMaxPrice     float64 // Max entry price to alert on massive trades (e.g., 0.70 = ignore obvious 70¢+ bets)
+	MassiveTradeMinNotional float64 // Minimum notional for massive trade alerts (e.g., 50000)
+	MassiveTradeMaxPrice    float64 // Max entry price to alert on massive trades (e.g., 0.70 = ignore obvious 70¢+ bets)
 
 	// Global obvious price filter - skip ALL alerts above this price
 	ObviousPrice float64 // Max price to alert on (e.g., 0.85 = skip alerts for trades at 85¢+)
@@ -51,25 +51,27 @@ type TradeMonitorConfig struct {
 // DefaultTradeMonitorConfig returns sensible defaults.
 func DefaultTradeMonitorConfig() TradeMonitorConfig {
 	return TradeMonitorConfig{
-		PollInterval:          10 * time.Second,
-		MinNotional:           4000.0,
-		MaxMarketsForLow:      5,             // < 5 unique markets = low activity
-		HighWinRateThreshold:  0.90,          // 90% win rate
-		MinResolvedForWinRate: 5,             // at least 5 resolved positions
-		ExtremeLowPrice:       0.03,          // 3¢ or lower (longshot bet)
-		ExtremeMinNotional:    2500,          // $2500 minimum for extreme odds
-		RapidTradeWindow:      5 * time.Minute, // 5 minute window
-		RapidTradeMinCount:    3,             // 3+ trades in window
-		RapidTradeMinTotal:    5000,          // $5000 total in window
-		NewWalletMaxMarkets:   1,             // 0-1 prior markets = new wallet
-		NewWalletMinNotional:  10000,         // $10000 minimum for new wallet alerts
-		ContrarianMaxPrice:      0.10,          // 10¢ or lower = betting against consensus
-		ContrarianMinNotional:   5000,          // $5000 minimum for contrarian alerts
-		MassiveTradeMinNotional: 50000,         // $50000 minimum for massive trade alerts
-		MassiveTradeMaxPrice:    0.70,          // Only alert on massive trades at 70¢ or below
-		ObviousPrice:            0.75,          // Skip all alerts for trades at 85¢ or above
+		PollInterval:            10 * time.Second,
+		MinNotional:             4000.0,
+		MaxMarketsForLow:        5,               // < 5 unique markets = low activity
+		HighWinRateThreshold:    0.90,            // 90% win rate
+		MinResolvedForWinRate:   5,               // at least 5 resolved positions
+		ExtremeLowPrice:         0.03,            // 3¢ or lower (longshot bet)
+		ExtremeMinNotional:      2500,            // $2500 minimum for extreme odds
+		RapidTradeWindow:        5 * time.Minute, // 5 minute window
+		RapidTradeMinCount:      3,               // 3+ trades in window
+		RapidTradeMinTotal:      5000,            // $5000 total in window
+		NewWalletMaxMarkets:     1,               // 0-1 prior markets = new wallet
+		NewWalletMinNotional:    10000,           // $10000 minimum for new wallet alerts
+		ContrarianMaxPrice:      0.10,            // 10¢ or lower = betting against consensus
+		ContrarianMinNotional:   5000,            // $5000 minimum for contrarian alerts
+		MassiveTradeMinNotional: 50000,           // $50000 minimum for massive trade alerts
+		MassiveTradeMaxPrice:    0.70,            // Only alert on massive trades at 70¢ or below
+		ObviousPrice:            0.75,            // Skip all alerts for trades at 85¢ or above
 	}
 }
+
+const maxTradeMonitorPollBackoff = 2 * time.Minute
 
 // Type aliases for cleaner code
 type AlertReason = notifier.AlertReason
@@ -138,28 +140,28 @@ type TradeMonitor struct {
 	eventTypes   map[string]int
 
 	// Filter stats for debugging
-	filterStatsMu               sync.Mutex
-	skippedLowNotional          int
-	skippedNoWallet             int
-	skippedWalletFilter         int
-	skippedHighActivity         int
-	skippedObvious              int
-	alertsSent                  int
-	alertsLowActivity           int
-	alertsHighWinRate           int
-	alertsExtremeBet            int
-	alertsRapidTrading          int
-	alertsNewWallet             int
-	alertsContrarianBet         int
-	alertsMassiveTrade          int
-	alertsContrarianWinner      int
-	alertsCopyTrader            int
-	alertsHedgeRemoval          int
-	alertsAsymmetricExit        int
-	alertsResolutionConfirmed   int
-	alertsConvictionDoubling    int
-	alertsPerfectExitTiming     int
-	alertsStealthAccumulation   int
+	filterStatsMu             sync.Mutex
+	skippedLowNotional        int
+	skippedNoWallet           int
+	skippedWalletFilter       int
+	skippedHighActivity       int
+	skippedObvious            int
+	alertsSent                int
+	alertsLowActivity         int
+	alertsHighWinRate         int
+	alertsExtremeBet          int
+	alertsRapidTrading        int
+	alertsNewWallet           int
+	alertsContrarianBet       int
+	alertsMassiveTrade        int
+	alertsContrarianWinner    int
+	alertsCopyTrader          int
+	alertsHedgeRemoval        int
+	alertsAsymmetricExit      int
+	alertsResolutionConfirmed int
+	alertsConvictionDoubling  int
+	alertsPerfectExitTiming   int
+	alertsStealthAccumulation int
 
 	// Rapid trading detection - track recent trades per wallet
 	recentTradesMu sync.Mutex
@@ -850,45 +852,84 @@ func (tm *TradeMonitor) processTradeEvent(ctx context.Context, event *polymarket
 // runPolling runs the fallback polling mode.
 func (tm *TradeMonitor) runPolling(ctx context.Context) {
 	cfg := tm.getConfig()
-	ticker := time.NewTicker(cfg.PollInterval)
-	defer ticker.Stop()
+	baseInterval := cfg.PollInterval
 
 	tm.logger.Info("trade monitor using polling mode",
-		zap.Duration("pollInterval", cfg.PollInterval),
+		zap.Duration("pollInterval", baseInterval),
 	)
 
-	// Initial poll
-	tm.poll(ctx)
+	consecutiveFailures := 0
+	nextInterval := baseInterval
+	if !tm.poll(ctx) {
+		consecutiveFailures = 1
+		nextInterval = tradeMonitorPollBackoff(baseInterval, consecutiveFailures)
+		tm.logger.Warn("trade monitor polling backing off after fetch failure",
+			zap.Int("consecutiveFailures", consecutiveFailures),
+			zap.Duration("nextPollIn", nextInterval))
+	}
+
+	timer := time.NewTimer(nextInterval)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			tm.logger.Info("trade monitor shutting down")
 			return
-		case <-ticker.C:
-			tm.poll(ctx)
+		case <-timer.C:
+			if tm.poll(ctx) {
+				if consecutiveFailures > 0 {
+					tm.logger.Info("trade monitor polling recovered",
+						zap.Int("consecutiveFailures", consecutiveFailures))
+				}
+				consecutiveFailures = 0
+				nextInterval = baseInterval
+			} else {
+				consecutiveFailures++
+				nextInterval = tradeMonitorPollBackoff(baseInterval, consecutiveFailures)
+				tm.logger.Warn("trade monitor polling backing off after fetch failure",
+					zap.Int("consecutiveFailures", consecutiveFailures),
+					zap.Duration("nextPollIn", nextInterval))
+			}
+			timer.Reset(nextInterval)
 		}
 	}
 }
 
-func (tm *TradeMonitor) poll(ctx context.Context) {
+func tradeMonitorPollBackoff(base time.Duration, consecutiveFailures int) time.Duration {
+	if consecutiveFailures <= 0 {
+		return base
+	}
+
+	backoff := base
+	for i := 1; i < consecutiveFailures; i++ {
+		backoff *= 2
+		if backoff >= maxTradeMonitorPollBackoff {
+			return maxTradeMonitorPollBackoff
+		}
+	}
+	return backoff
+}
+
+func (tm *TradeMonitor) poll(ctx context.Context) bool {
 	tm.mu.RLock()
 	markets := tm.markets
 	tm.mu.RUnlock()
 
 	if len(markets) == 0 {
-		return
+		return true
 	}
 
 	trades, err := tm.apiClient.GetTrades(ctx, markets, 100)
 	if err != nil {
 		tm.logger.Warn("failed to fetch trades", zap.Error(err))
-		return
+		return false
 	}
 
 	for _, trade := range trades {
 		tm.processTrade(ctx, trade)
 	}
+	return true
 }
 
 // SetWSConnected sets the WebSocket connection state.
@@ -1461,26 +1502,26 @@ func (tm *TradeMonitor) EventTypeCounts() map[string]int {
 
 // FilterStats holds filter statistics for debugging.
 type FilterStats struct {
-	SkippedLowNotional         int
-	SkippedNoWallet            int
-	SkippedHighActivity        int
-	SkippedObvious             int
-	AlertsSent                 int
-	AlertsLowActivity          int
-	AlertsHighWinRate          int
-	AlertsExtremeBet           int
-	AlertsRapidTrading         int
-	AlertsNewWallet            int
-	AlertsContrarianBet        int
-	AlertsMassiveTrade         int
-	AlertsContrarianWinner     int
-	AlertsCopyTrader           int
-	AlertsHedgeRemoval         int
-	AlertsAsymmetricExit       int
-	AlertsResolutionConfirmed  int
-	AlertsConvictionDoubling   int
-	AlertsPerfectExitTiming    int
-	AlertsStealthAccumulation  int
+	SkippedLowNotional        int
+	SkippedNoWallet           int
+	SkippedHighActivity       int
+	SkippedObvious            int
+	AlertsSent                int
+	AlertsLowActivity         int
+	AlertsHighWinRate         int
+	AlertsExtremeBet          int
+	AlertsRapidTrading        int
+	AlertsNewWallet           int
+	AlertsContrarianBet       int
+	AlertsMassiveTrade        int
+	AlertsContrarianWinner    int
+	AlertsCopyTrader          int
+	AlertsHedgeRemoval        int
+	AlertsAsymmetricExit      int
+	AlertsResolutionConfirmed int
+	AlertsConvictionDoubling  int
+	AlertsPerfectExitTiming   int
+	AlertsStealthAccumulation int
 }
 
 // FilterStats returns the current filter statistics.
